@@ -7,5 +7,20 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      # PUBLIC_URL: la URL de tu servicio en Render (se obtiene automáticamente)
+      - key: PUBLIC_URL
+        value: https://n8n-proxy-b2m9.onrender.com
+      # TARGET_URL: la URL donde está tu n8n en producción
+      # Si usas Render, despliega también n8n o usa una URL externa
       - key: TARGET_URL
-        value: "http://localhost:5678"
+        value: https://tu-n8n-produccion.onrender.com
+      # Path del webhook en tu n8n
+      - key: WEBHOOK_PATH
+        value: /webhook/test
+      # Token para proteger el endpoint de configuración
+      - key: CONFIG_TOKEN
+        value: changeme_in_production

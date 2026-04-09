@@ -1,11 +1,26 @@
 {
   "name": "n8n-proxy",
   "version": "1.0.0",
+  "description": "Proxy para exponer webhooks de N8N vía Tunnelmole",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node -e \"console.log('Tests aquí')\""
   },
   "dependencies": {
     "express": "^4.18.2"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "n8n",
+    "webhooks",
+    "proxy",
+    "tunnelmole"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
   }
 }

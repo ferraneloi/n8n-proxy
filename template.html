@@ -1,25 +1,214 @@
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Formulario n8n</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    
+    .container {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+    }
+    
+    h2 {
+      color: #333;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 5px;
+      font-size: 16px;
+      transition: border-color 0.3s;
+      margin-bottom: 10px;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    button {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    button:active {
+      transform: translateY(0);
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    #status {
+      margin-top: 20px;
+      padding: 12px;
+      border-radius: 5px;
+      text-align: center;
+      font-weight: bold;
+      display: none;
+    }
+    
+    #status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      display: block;
+    }
+    
+    #status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      display: block;
+    }
+    
+    .info {
+      background: #f0f7ff;
+      border-left: 4px solid #667eea;
+      padding: 15px;
+      margin-top: 20px;
+      border-radius: 5px;
+      font-size: 14px;
+      color: #333;
+    }
+  </style>
+</head>
 <body>
-  <h2>Formulario n8n</h2>
-
-  <input type="text" id="nombre" placeholder="Tu nombre" />
-  <button onclick="enviar()">Enviar</button>
+  <div class="container">
+    <h2>Formulario N8N Webhook</h2>
+    
+    <div class="form-group">
+      <input type="text" id="nombre" placeholder="Introduce tu nombre" />
+    </div>
+    
+    <button id="enviarBtn" onclick="enviar()">Enviar</button>
+    
+    <div id="status"></div>
+    
+    <div class="info">
+      <strong>ℹ️ Información:</strong>
+      <p style="margin-top: 8px;">Este formulario envía datos a través del webhook de N8N. Los datos se procesarán automáticamente.</p>
+    </div>
+  </div>
 
   <script>
-    const webhookUrl = "__WEBHOOK_URL__";
-
-    function enviar() {
-      fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nombre: document.getElementById("nombre").value
-        })
-      })
-      .then(() => alert("Enviado!"))
-      .catch(() => alert("Error"));
+    // Obtener la URL del webhook desde el servidor proxy
+    let webhookUrl = null;
+    let serverUrl = window.location.origin;
+    
+    // Cargar configuración desde el servidor
+    async function loadConfig() {
+      try {
+        const response = await fetch(`${serverUrl}/api/config`);
+        if (response.ok) {
+          const config = await response.json();
+          webhookUrl = config.webhookUrl;
+          console.log("✓ Webhook URL cargada:", webhookUrl);
+        } else {
+          throw new Error("No se pudo obtener la configuración");
+        }
+      } catch (err) {
+        console.error("Error al cargar configuración:", err);
+        showStatus("Error al cargar la configuración del servidor", "error");
+      }
     }
+    
+    // Cargar config al iniciar
+    window.addEventListener('load', loadConfig);
+    
+    function showStatus(message, type) {
+      const status = document.getElementById("status");
+      status.textContent = message;
+      status.className = type;
+    }
+    
+    async function enviar() {
+      if (!webhookUrl) {
+        showStatus("Esperando configuración del servidor...", "error");
+        return;
+      }
+      
+      const nombre = document.getElementById("nombre").value.trim();
+      if (!nombre) {
+        showStatus("Por favor introduce tu nombre", "error");
+        return;
+      }
+      
+      const button = document.getElementById("enviarBtn");
+      button.disabled = true;
+      button.textContent = "Enviando...";
+      showStatus("Enviando...", "");
+      
+      try {
+        const response = await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre })
+        });
+        
+        if (response.ok) {
+          showStatus("✓ ¡Enviado correctamente!", "success");
+          document.getElementById("nombre").value = "";
+        } else {
+          showStatus(`✗ Error: ${response.status} ${response.statusText}`, "error");
+        }
+      } catch (err) {
+        console.error("Error:", err);
+        showStatus(`✗ Error de conexión: ${err.message}`, "error");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Enviar";
+      }
+    }
+    
+    // Permitir enviar con Enter
+    document.getElementById("nombre").addEventListener("keypress", (e) => {
+      if (e.key === "Enter") enviar();
+    });
   </script>
 </body>
 </html>
