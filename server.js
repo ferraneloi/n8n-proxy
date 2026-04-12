@@ -127,28 +127,17 @@ app.post("/api/setup-test-workflow", async (req, res) => {
     const existing = workflows.find(wf => wf.name === "test");
 
     if (existing) {
-      // Leer path real del webhook node desde los detalles completos del workflow
-      let actualPath = TEST_WEBHOOK_PATH;
-      try {
-        const detailRes = await fetch(`${TUNNEL_URL}/api/v1/workflows/${existing.id}`, {
-          headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
-        });
-        if (detailRes.ok) {
-          const detail = await detailRes.json();
-          const wNode = (detail.nodes || []).find(n =>
-            n.type === "n8n-nodes-base.webhook" || n.type === "@n8n/n8n-nodes-langchain.webhook"
-          );
-          if (wNode?.parameters?.path) actualPath = wNode.parameters.path;
-        }
-      } catch {}
-      return res.json({
-        created: false,
-        message: `El workflow 'test' ya existe (path: ${actualPath})`,
-        workflowId: existing.id,
-        webhookPath: actualPath,
-        webhookUrl: `${proxyBase}/webhook/${actualPath}`,
-        webhookTestUrl: `${proxyBase}/webhook-test/${actualPath}`,
+      // Borrar el workflow existente antes de recrearlo
+      console.log(`[SETUP] Deleting existing 'test' workflow id=${existing.id}`);
+      const delRes = await fetch(`${TUNNEL_URL}/api/v1/workflows/${existing.id}`, {
+        method: "DELETE",
+        headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
       });
+      if (!delRes.ok) {
+        const txt = await delRes.text();
+        return res.status(delRes.status).json({ error: "No se pudo borrar el workflow existente", message: txt });
+      }
+      console.log(`[SETUP] Deleted workflow id=${existing.id}, proceeding to recreate`);
     }
 
     // Crear el workflow con 3 nodos: Webhook → Set → Respond to Webhook
@@ -235,9 +224,12 @@ app.post("/api/setup-test-workflow", async (req, res) => {
       method: "POST",
       headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
     });
+    const wasExisting = !!existing;
     res.json({
       created: true,
-      message: "Workflow 'test' creado y activado correctamente",
+      message: wasExisting
+        ? "Workflow 'test' eliminado y recreado correctamente"
+        : "Workflow 'test' creado y activado correctamente",
       workflowId: wfId,
       webhookPath: TEST_WEBHOOK_PATH,
       webhookUrl: `${proxyBase}/webhook/${TEST_WEBHOOK_PATH}`,
