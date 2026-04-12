@@ -7,6 +7,14 @@ let TUNNEL_REGISTERED_AT = null;
 let N8N_API_KEY = process.env.N8N_API_KEY || "";
 const CONFIG_TOKEN = process.env.CONFIG_TOKEN || "mysecret";
 const TEST_WEBHOOK_PATH = "test-form";
+const FETCH_TIMEOUT_MS = 8000;
+
+// ─── Helper: fetch con timeout ───────────────────────────────────────────────
+function n8nFetch(url, options = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
 app.use("/api", express.json());
@@ -42,14 +50,14 @@ app.get("/api/debug", async (req, res) => {
   const state = { tunnelUrl: TUNNEL_URL || null, tunnelActive: !!TUNNEL_URL, hasApiKey: !!N8N_API_KEY };
   if (!TUNNEL_URL || !N8N_API_KEY) return res.json({ state, error: "Tunnel or API key not configured" });
   try {
-    const r = await fetch(`${TUNNEL_URL}/api/v1/workflows?limit=5`, {
+    const r = await n8nFetch(`${TUNNEL_URL}/api/v1/workflows?limit=5`, {
       headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
     });
     let data;
     try { data = await r.json(); } catch { data = await r.text(); }
     res.json({ state, n8nStatus: r.status, n8nResponse: data });
   } catch (err) {
-    res.json({ state, n8nError: err.message });
+    res.json({ state, n8nError: err.name === "AbortError" ? `Timeout (>${FETCH_TIMEOUT_MS}ms)` : err.message });
   }
 });
 
@@ -62,7 +70,8 @@ app.get("/api/webhooks", async (req, res) => {
     return res.status(400).json({ error: "N8N_API_KEY not configured", message: "Falta N8N_API_KEY. Añadelo al .env local y reinicia start.ps1." });
   }
   try {
-    const listRes = await fetch(`${TUNNEL_URL}/api/v1/workflows?active=true&limit=50`, {
+    // Paso 1: lista de workflows activos (con timeout)
+    const listRes = await n8nFetch(`${TUNNEL_URL}/api/v1/workflows?active=true&limit=50`, {
       headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
     });
     if (!listRes.ok) {
@@ -73,37 +82,44 @@ app.get("/api/webhooks", async (req, res) => {
     const workflowList = listData.data || listData;
     const proxyBase = `${req.protocol}://${req.get("host")}`;
     const webhooks = [];
-    await Promise.all(workflowList.map(async (wfMeta) => {
-      try {
-        let wf = wfMeta;
-        if (!wf.nodes) {
-          const detailRes = await fetch(`${TUNNEL_URL}/api/v1/workflows/${wfMeta.id}`, {
-            headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
-          });
-          if (detailRes.ok) wf = await detailRes.json();
-        }
-        if (!wf.nodes) return;
-        for (const node of wf.nodes) {
-          if (node.type === "n8n-nodes-base.webhook" || node.type === "@n8n/n8n-nodes-langchain.webhook") {
-            const path = node.parameters?.path || "";
-            if (path) {
-              webhooks.push({
-                workflowId: wf.id,
-                workflowName: wf.name,
-                workflowActive: wf.active,
-                nodeName: node.name,
-                path,
-                urlProxy: `${proxyBase}/webhook/${path}`,
-                urlProxyTest: `${proxyBase}/webhook-test/${path}`,
-              });
+
+    // Paso 2: obtener nodes de cada workflow — máx 5 en paralelo
+    const CONCURRENCY = 5;
+    for (let i = 0; i < workflowList.length; i += CONCURRENCY) {
+      const batch = workflowList.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async (wfMeta) => {
+        try {
+          let wf = wfMeta;
+          if (!wf.nodes) {
+            const detailRes = await n8nFetch(`${TUNNEL_URL}/api/v1/workflows/${wfMeta.id}`, {
+              headers: { "X-N8N-API-KEY": N8N_API_KEY, "Accept": "application/json" },
+            });
+            if (detailRes.ok) wf = await detailRes.json();
+          }
+          if (!wf.nodes) return;
+          for (const node of wf.nodes) {
+            if (node.type === "n8n-nodes-base.webhook" || node.type === "@n8n/n8n-nodes-langchain.webhook") {
+              const path = node.parameters?.path || "";
+              if (path) {
+                webhooks.push({
+                  workflowId: wf.id,
+                  workflowName: wf.name,
+                  workflowActive: wf.active,
+                  nodeName: node.name,
+                  path,
+                  urlProxy: `${proxyBase}/webhook/${path}`,
+                  urlProxyTest: `${proxyBase}/webhook-test/${path}`,
+                });
+              }
             }
           }
-        }
-      } catch { /* workflow individual inaccesible */ }
-    }));
+        } catch { /* workflow individual timeout o error, se salta */ }
+      }));
+    }
     res.json({ total: webhooks.length, tunnelUrl: TUNNEL_URL, webhooks });
   } catch (err) {
-    res.status(502).json({ error: "Could not reach n8n through tunnel", message: err.message });
+    const msg = err.name === "AbortError" ? `Timeout: n8n no respondio en ${FETCH_TIMEOUT_MS}ms` : err.message;
+    res.status(502).json({ error: "Could not reach n8n through tunnel", message: msg });
   }
 });
 
