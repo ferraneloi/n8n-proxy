@@ -239,10 +239,12 @@ app.get("/", (req, res) => {
       ${TUNNEL_REGISTERED_AT ? `<dt>Registered</dt><dd>${TUNNEL_REGISTERED_AT}</dd>` : ""}
     </dl>
     <a class="btn" href="/dashboard">📋 Ver Webhooks Publicados</a>
+    <a class="btn" style="background: linear-gradient(135deg, #10b981, #059669);" href="/form">📝 Formulario de Prueba</a>
     <h3 style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 8px; margin-top: 20px;">Endpoints</h3>
     <ul class="endpoints">
       <li><span class="method">ANY</span> <code>/webhook/*</code> → proxy to n8n</li>
       <li><span class="method">ANY</span> <code>/webhook-test/*</code> → proxy to n8n</li>
+      <li><span class="method">GET</span> <code>/form</code> → test form</li>
       <li><span class="method">GET</span> <code>/dashboard</code> → webhook list</li>
       <li><span class="method">GET</span> <code>/api/webhooks</code> → webhook list JSON</li>
       <li><span class="method">POST</span> <code>/api/tunnel</code> → register tunnel</li>
@@ -250,6 +252,109 @@ app.get("/", (req, res) => {
     </ul>
     <footer>n8n Webhook Proxy &middot; Powered by Render</footer>
   </div>
+</body>
+</html>`);
+});
+
+// ─── Form Page ───────────────────────────────────────────────────────────────
+app.get("/form", (req, res) => {
+  res.type("text/html").send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>n8n Test Form</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #1e293b; border-radius: 12px; padding: 32px; max-width: 450px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.3); border: 1px solid #334155; }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; color: #f8fafc; text-align: center; }
+    p.subtitle { color: #94a3b8; font-size: 0.9rem; text-align: center; margin-bottom: 24px; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; font-size: 0.8rem; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }
+    input { width: 100%; padding: 12px; border-radius: 8px; background: #0f172a; border: 1px solid #334155; color: #fff; font-size: 1rem; outline: none; transition: border-color 0.2s; }
+    input:focus { border-color: #6366f1; }
+    button { width: 100%; padding: 12px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; border: none; font-size: 1rem; font-weight: 600; cursor: pointer; transition: transform 0.1s; }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .result { margin-top: 24px; padding: 16px; border-radius: 8px; background: #0f172a; border: 1px solid #334155; display: none; }
+    .result.show { display: block; }
+    .result-title { font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; }
+    .result-content { font-family: monospace; font-size: 0.9rem; color: #10b981; white-space: pre-wrap; word-break: break-all; }
+    .error { color: #ef4444; }
+    .nav { margin-top: 24px; text-align: center; }
+    .nav a { color: #6366f1; text-decoration: none; font-size: 0.85rem; }
+    .nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📝 n8n Test Form</h1>
+    <p class="subtitle">Envía datos a tu workflow de n8n</p>
+    
+    <form id="testForm">
+      <div class="form-group">
+        <label>Nombre</label>
+        <input type="text" id="nombre" placeholder="Escribe tu nombre..." required>
+      </div>
+      <button type="submit" id="submitBtn">Enviar a n8n</button>
+    </form>
+
+    <div id="resultBox" class="result">
+      <p class="result-title">Respuesta de n8n:</p>
+      <div id="resultContent" class="result-content"></div>
+    </div>
+
+    <div class="nav">
+      <a href="/dashboard">📋 Ver otros webhooks</a> &middot; <a href="/">🏠 Inicio</a>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('testForm');
+    const btn = document.getElementById('submitBtn');
+    const resultBox = document.getElementById('resultBox');
+    const resultContent = document.getElementById('resultContent');
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const nombre = document.getElementById('nombre').value;
+      
+      btn.disabled = true;
+      btn.textContent = 'Enviando...';
+      resultBox.classList.remove('show');
+      
+      try {
+        // Intentamos obtener el primer webhook activo automáticamente
+        const webhooksRes = await fetch('/api/webhooks');
+        const webhooksData = await webhooksRes.json();
+        
+        let webhookPath = "b273007d-e02a-416b-ad36-823d17458c07"; // fallback
+        if (webhooksData.webhooks && webhooksData.webhooks.length > 0) {
+          const active = webhooksData.webhooks.find(w => w.workflowActive);
+          if (active) webhookPath = active.path;
+        }
+
+        const response = await fetch('/webhook/' + webhookPath, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nombre })
+        });
+
+        const data = await response.json();
+        resultContent.classList.remove('error');
+        resultContent.textContent = JSON.stringify(data, null, 2);
+        resultBox.classList.add('show');
+      } catch (err) {
+        resultContent.classList.add('error');
+        resultContent.textContent = 'Error: ' + err.message;
+        resultBox.classList.add('show');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Enviar a n8n';
+      }
+    };
+  </script>
 </body>
 </html>`);
 });
