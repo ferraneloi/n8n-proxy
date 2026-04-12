@@ -1,276 +1,141 @@
-# N8N Webhook Proxy con Tunnelmole
+# n8n Webhook Tunnel
 
-Sistema completo para exponer webhooks de N8N en localhost a través de Tunnelmole y desplegar en Render con un proxy Node.js/Express.
+Expone los webhooks de tu n8n local a internet usando un proxy en Render + túnel con [Tunnelmole](https://tunnelmole.com).
 
-## 🏗️ Arquitectura
+## Cómo funciona
 
-### Entorno Local (Desarrollo)
 ```
-┌─────────────────────────────────────────────────────┐
-│ Docker Compose                                       │
-├─────────────────────────────────────────────────────┤
-│ • PostgreSQL (BD para N8N)                          │
-│ • N8N (http://localhost:5678)                      │
-│ • N8N Runner                                        │
-└─────────────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────────────┐
-│ Proxy Node.js (http://localhost:3000)               │
-│ • Recibe peticiones en /webhook/test                │
-│ • Forwardea a http://localhost:5678/webhook/test   │
-└─────────────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────────────┐
-│ Tunnelmole (https://xxxx.tunnelmole.com)            │
-│ • Expone localhost:3000 en URL pública              │
-│ • Formulario accesible desde cualquier lugar        │
-└─────────────────────────────────────────────────────┘
+Usuario externo (cualquier PC)
+        │
+        ▼
+Render Proxy (URL estable en la nube)
+https://n8n-proxy-b2m9.onrender.com/webhook/UUID
+        │
+        ▼
+Túnel tmole (URL dinámica)
+https://xxx.tunnelmole.net/webhook/UUID
+        │
+        ▼
+Tu PC local → Docker → n8n
+http://localhost:5678/webhook/UUID
 ```
 
-### Entorno de Producción (Render)
-```
-┌─────────────────────────────────────────────────────┐
-│ Render Web Service (Node.js)                        │
-│ • Proxy corriendo en https://n8n-proxy.onrender.com │
-│ • Conecta a N8N en producción                       │
-│ • Expone webhook público                           │
-└─────────────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────────────┐
-│ N8N en Producción                                   │
-│ (Render o servicio externo)                        │
-└─────────────────────────────────────────────────────┘
-```
+**Resultado:** Cualquier persona puede llamar a tus webhooks de n8n a través de la URL de Render, sin importar que n8n esté en tu PC local.
 
-## 📋 Requisitos
+## Requisitos
 
-### Local
-- Node.js 14+
-- Docker y Docker Compose
-- Tunnelmole CLI (`npm install -g tunnelmole`)
-- PowerShell (en Windows)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado y corriendo
+- [Node.js](https://nodejs.org/) >= 18
+- `tmole.exe` en la raíz del proyecto ([descargar](https://tunnelmole.com))
+- Un Web Service en [Render.com](https://render.com) conectado a este repositorio
 
-### Render
-- Repositorio Git con este código
-- Cuenta en Render.com
-- URL de N8N en producción
+## Setup inicial (una vez)
 
-## 🚀 Inicio Rápido Local
-
-### 1️⃣ Preparar variables de entorno
+### 1. Clonar y configurar
 
 ```bash
-# El archivo .env ya viene preconfigurado con:
-# - PostgreSQL: pguser/pgpass
-# - N8N: http://localhost:5678
-# - Proxy: http://localhost:3000
-# - Webhook path: /webhook/test
+git clone https://github.com/ferraneloi/n8n-proxy.git
+cd n8n-proxy
+cp .env.example .env
 ```
 
-### 2️⃣ Instalar dependencias
+### 2. Editar `.env`
 
-```bash
-npm install
+```env
+# La URL de tu servicio en Render
+RENDER_URL=https://tu-servicio.onrender.com
+
+# Token secreto (debe coincidir con el de Render)
+CONFIG_TOKEN=tu-token-secreto
 ```
 
-### 3️⃣ Ejecutar el script de inicio
+### 3. Crear el servicio en Render
 
-En PowerShell:
+1. Ve a [Render Dashboard](https://dashboard.render.com)
+2. Crea un **New Web Service** → conecta tu repositorio de GitHub
+3. Render usará `render.yaml` automáticamente
+4. En **Environment**, asegúrate de que `CONFIG_TOKEN` coincida con tu `.env`
+
+### 4. Descargar tmole
+
+Descarga `tmole.exe` desde [tunnelmole.com](https://tunnelmole.com) y colócalo en la raíz del proyecto.
+
+## Uso diario
+
+### Arrancar todo
+
 ```powershell
 .\start.ps1
 ```
 
-Este script:
-- ✅ Inicia Docker Compose (PostgreSQL, N8N, N8N Runner)
-- ✅ Espera a que N8N esté disponible
-- ✅ Te pide el webhook path de N8N
-- ✅ Inicia el proxy Node.js
+Esto automáticamente:
+1. ✅ Arranca Docker Compose (n8n + PostgreSQL)
+2. ✅ Espera a que n8n esté listo
+3. ✅ Inicia tmole (túnel al puerto 5678)
+4. ✅ Registra la URL del túnel con el proxy de Render
 
-### 4️⃣ Iniciar Tunnelmole en otra terminal
+### Crear un webhook en n8n
 
-```bash
-tmole 3000
+1. Abre n8n en `http://localhost:5678`
+2. Crea un workflow con un nodo **Webhook**
+3. El nodo mostrará un path como `/webhook/abc-123-def`
+4. Activa el workflow
+
+### Acceder al webhook desde fuera
+
+Usa la URL de Render + el path del webhook:
+
+```
+https://tu-servicio.onrender.com/webhook/abc-123-def
 ```
 
-Esto te dará una URL como: `https://xxxx.tunnelmole.com`
-
-### 5️⃣ Acceder al formulario
-
-- **Local**: http://localhost:3000/form
-- **Público (Tunnelmole)**: https://xxxx.tunnelmole.com/form
-
-## 📝 Obtener el Webhook Path de N8N
-
-1. Abre http://localhost:5678
-2. En tu workflow, añade un nodo "Webhook"
-3. Copia el path que genera (ej: `/webhook/3bffaaea-4f6d-4e80-bf54-ca08a3a7c72b`)
-4. El script te pedirá que lo introduzcas
-
-## 🌐 Endpoints Disponibles
-
-| Endpoint | Método | Descripción |
-|----------|--------|-------------|
-| `/` | GET | Página de inicio con info del servidor |
-| `/form` | GET | Formulario HTML con URL dinámicamente inyectada |
-| `/webhook/test` | POST | Webhook público de prueba |
-| `/webhook/*` | POST/GET/etc | Proxy genérico para cualquier webhook |
-| `/api/config` | GET | Obtener configuración actual en JSON |
-| `/api/config` | POST | Actualizar configuración (requiere token) |
-| `/health` | GET | Health check |
-
-## 🔧 Configuración Dinámica
-
-### Obtener configuración actual:
+Ejemplo con curl:
 ```bash
-curl http://localhost:3000/api/config
-```
-
-### Actualizar configuración:
-```bash
-curl -X POST http://localhost:3000/api/config \
-  -H "Authorization: Bearer mysecret" \
+curl -X POST https://tu-servicio.onrender.com/webhook/abc-123-def \
   -H "Content-Type: application/json" \
-  -d '{
-    "targetUrl": "http://n8n.example.com:5678",
-    "webhookPath": "/webhook/nuevo-path",
-    "publicUrl": "https://mi-proxy.com"
-  }'
+  -d '{"nombre": "test"}'
 ```
 
-## 🚀 Desplegar en Render
+### Parar
 
-### 1. Conectar el repositorio
+- `Ctrl+C` en la terminal del script (detiene tmole)
+- `docker compose down` para detener n8n
 
-1. Sube este código a GitHub
-2. Abre https://render.com
-3. Crea nuevo "Web Service"
-4. Conecta tu repositorio GitHub
-5. Render detectará automáticamente que es Node.js
+## Endpoints del proxy (Render)
 
-### 2. Configurar variables de entorno en Render
+| Método | Path | Descripción |
+|--------|------|-------------|
+| `ANY` | `/webhook/*` | Proxy a n8n (webhooks de producción) |
+| `ANY` | `/webhook-test/*` | Proxy a n8n (webhooks de test) |
+| `POST` | `/api/tunnel` | Registrar URL del túnel (requiere token) |
+| `GET` | `/api/status` | Ver estado del túnel |
+| `GET` | `/health` | Health check |
+| `GET` | `/` | Página de estado |
 
-En el panel de Render, añade estas variables:
-
-```
-PUBLIC_URL = https://n8n-proxy-xxxx.onrender.com
-TARGET_URL = https://tu-n8n-produccion.onrender.com
-WEBHOOK_PATH = /webhook/tu-webhook-id
-CONFIG_TOKEN = tu-token-seguro-aqui
-NODE_ENV = production
-```
-
-**⚠️ IMPORTANTE**: 
-- `TARGET_URL` debe ser tu N8N en producción (no localhost)
-- `PUBLIC_URL` debe ser la URL de tu servicio en Render
-- Crea un `CONFIG_TOKEN` fuerte y distinto a "mysecret"
-
-### 3. Desplegar
-
-Render desplegará automáticamente cada vez que hagas push a `main`.
-
-```bash
-git add .
-git commit -m "Deploy N8N proxy to Render"
-git push origin main
-```
-
-## 🔍 Debugging
-
-### Ver logs locales
-```bash
-node server.js
-```
-
-### Ver logs en Render
-En el panel de Render → Logs
-
-### Probar el webhook manualmente
-
-```bash
-# Local
-curl -X POST http://localhost:3000/webhook/test \
-  -H "Content-Type: application/json" \
-  -d '{"nombre": "Test"}'
-
-# Render
-curl -X POST https://n8n-proxy-xxxx.onrender.com/webhook/test \
-  -H "Content-Type: application/json" \
-  -d '{"nombre": "Test"}'
-```
-
-## ⚙️ Variables de Entorno
-
-| Variable | Defecto | Descripción |
-|----------|---------|-------------|
-| `PORT` | 3000 | Puerto del servidor proxy |
-| `PUBLIC_URL` | http://localhost:3000 | URL pública del proxy |
-| `TARGET_URL` | http://localhost:5678 | URL de N8N |
-| `WEBHOOK_PATH` | /webhook/test | Path del webhook en N8N |
-| `CONFIG_TOKEN` | mysecret | Token para actualizar config |
-| `NODE_ENV` | development | Entorno (development/production) |
-
-## 📦 Estructura del Proyecto
+## Estructura del proyecto
 
 ```
-tunnel_n8n/
-├── server.js              # Servidor proxy Express
-├── package.json           # Dependencias Node.js
-├── docker-compose.yml     # Configuración Docker (N8N + PostgreSQL)
-├── render.yaml           # Configuración de Render
-├── form.html             # Formulario HTML (dinámico)
-├── template.html         # Alternativa de formulario
-├── .env                  # Variables de entorno local
-├── .env.example          # Plantilla de .env
-├── start.ps1             # Script de inicio (Windows/PowerShell)
-├── init-data.sh          # Script de init de PostgreSQL
-└── README.md             # Esta guía
+├── server.js           # Proxy (se ejecuta en Render)
+├── docker-compose.yml  # n8n + PostgreSQL (se ejecuta local)
+├── init-data.sh        # Script init de PostgreSQL
+├── start.ps1           # Script de inicio (arranca todo)
+├── render.yaml         # Configuración de Render
+├── package.json        # Dependencias Node.js
+├── .env                # Configuración local (no se sube a Git)
+├── .env.example        # Ejemplo de configuración
+└── tmole.exe           # Tunnelmole (no se sube a Git)
 ```
 
-## 🐛 Problemas Comunes
+## Solución de problemas
 
-### "Cannot find tmole"
-```bash
-npm install -g tunnelmole
-```
+### "Tunnel not configured" al llamar al webhook
+El proxy de Render no tiene registrada ninguna URL de túnel. Ejecuta `.\start.ps1` en tu PC.
 
-### "Docker Compose no inicia"
-```bash
-# Verificar que Docker está corriendo
-docker ps
+### Render tarda en responder (~30s)
+El plan gratuito de Render duerme el servicio tras 15 min de inactividad. La primera petición lo despierta (~30s).
 
-# Ver logs de Docker Compose
-docker compose logs -f
-```
+### tmole se desconecta
+El script `start.ps1` detecta automáticamente si tmole se cae y lo reinicia, re-registrando con Render.
 
-### "N8N no está disponible"
-```bash
-# Ver estado de contenedores
-docker compose ps
-
-# Ver logs de N8N
-docker compose logs -f n8n
-```
-
-### "Render elige localhost en TARGET_URL"
-Edita `render.yaml` y asegúrate de que `TARGET_URL` apunta a tu N8N en producción, NO a localhost.
-
-### "El webhook no forwardea a N8N"
-1. Verifica que TARGET_URL es correcto: `curl $TARGET_URL`
-2. Verifica que WEBHOOK_PATH es correcto (obtener de N8N)
-3. Revisa los logs: `node server.js`
-
-## 📚 Referencias
-
-- [N8N Documentation](https://docs.n8n.io)
-- [Tunnelmole](https://tunnelmole.com/)
-- [Render.com](https://render.com)
-- [Express.js](https://expressjs.com)
-
-## 📄 Licencia
-
-MIT
-
----
-
-**Última actualización**: Abril 2026
-**Versión**: 1.0.0
+### n8n no arranca
+Verifica que Docker Desktop esté corriendo: `docker compose logs n8n`

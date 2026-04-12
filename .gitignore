@@ -1,6 +1,5 @@
 node_modules/
 .env
 tmole.log
-form.html
-docker-compose.yml
-init-data.sh
+tmole_output.txt
+*.exe

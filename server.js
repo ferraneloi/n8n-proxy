@@ -1,247 +1,206 @@
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
-
 const app = express();
-app.use(express.json());
 
-let TARGET_URL = process.env.TARGET_URL || "http://localhost:5678";
-let WEBHOOK_PATH = process.env.WEBHOOK_PATH || "/webhook/test";
-let PUBLIC_URL = process.env.PUBLIC_URL || "http://localhost:3000";
+// ─── State ───────────────────────────────────────────────────────────────────
+let TUNNEL_URL = process.env.TARGET_URL || ""; // URL del túnel (se registra dinámicamente)
+let TUNNEL_REGISTERED_AT = null;
+const CONFIG_TOKEN = process.env.CONFIG_TOKEN || "mysecret";
 
-// Servir archivos estáticos
-app.use(express.static(path.join(__dirname, "public")));
+// ─── Middleware ──────────────────────────────────────────────────────────────
+// Parse JSON only for /api routes
+app.use("/api", express.json());
 
-// Endpoint para obtener la configuración actual (URL del webhook)
-app.get("/api/config", (req, res) => {
+// ─── API: Register tunnel URL ────────────────────────────────────────────────
+app.post("/api/tunnel", (req, res) => {
+  const token = req.headers.authorization;
+  if (token !== `Bearer ${CONFIG_TOKEN}`) {
+    return res.status(403).json({ error: "Forbidden", message: "Invalid token" });
+  }
+
+  const { tunnelUrl } = req.body;
+  if (!tunnelUrl) {
+    return res.status(400).json({ error: "Missing tunnelUrl in body" });
+  }
+
+  TUNNEL_URL = tunnelUrl.replace(/\/+$/, ""); // Remove trailing slashes
+  TUNNEL_REGISTERED_AT = new Date().toISOString();
+  console.log(`[TUNNEL] Registered: ${TUNNEL_URL}`);
+
   res.json({
-    webhookUrl: `${PUBLIC_URL}${WEBHOOK_PATH}`,
-    publicUrl: PUBLIC_URL,
-    webhookPath: WEBHOOK_PATH,
-    targetUrl: TARGET_URL
+    message: "Tunnel URL registered",
+    tunnelUrl: TUNNEL_URL,
+    registeredAt: TUNNEL_REGISTERED_AT,
   });
 });
 
-// Endpoint para servir template.html con URL inyectada
-app.get("/form", (req, res) => {
-  const webhookUrl = `${PUBLIC_URL}${WEBHOOK_PATH}`;
-  const html = `<!DOCTYPE html>
-<html>
+// ─── API: Get status ─────────────────────────────────────────────────────────
+app.get("/api/status", (req, res) => {
+  res.json({
+    tunnelUrl: TUNNEL_URL || null,
+    tunnelActive: !!TUNNEL_URL,
+    registeredAt: TUNNEL_REGISTERED_AT,
+    uptime: process.uptime(),
+  });
+});
+
+// ─── Health check ────────────────────────────────────────────────────────────
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    tunnelActive: !!TUNNEL_URL,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ─── Webhook Proxy ───────────────────────────────────────────────────────────
+// Proxy ALL webhook requests to the tunnel URL.
+// Handles: /webhook/*, /webhook-test/*
+// Supports any HTTP method and any content type.
+app.all(["/webhook/*", "/webhook-test/*"], (req, res) => {
+  if (!TUNNEL_URL) {
+    return res.status(503).json({
+      error: "Tunnel not configured",
+      message: "No tunnel URL registered. Run start.ps1 on your local machine to start the tunnel.",
+    });
+  }
+
+  const targetUrl = `${TUNNEL_URL}${req.originalUrl}`;
+  console.log(`[PROXY] ${req.method} ${req.originalUrl} -> ${targetUrl}`);
+
+  // Collect the raw request body
+  const chunks = [];
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", async () => {
+    try {
+      const rawBody = Buffer.concat(chunks);
+
+      // Build headers — forward all except host-related ones
+      const forwardHeaders = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        const lower = key.toLowerCase();
+        if (lower === "host" || lower === "connection" || lower === "content-length") continue;
+        forwardHeaders[key] = value;
+      }
+
+      const fetchOptions = {
+        method: req.method,
+        headers: forwardHeaders,
+      };
+
+      // Attach body for methods that support it
+      if (req.method !== "GET" && req.method !== "HEAD" && rawBody.length > 0) {
+        fetchOptions.body = rawBody;
+      }
+
+      const response = await fetch(targetUrl, fetchOptions);
+
+      // Forward response status
+      res.status(response.status);
+
+      // Forward response headers
+      response.headers.forEach((value, name) => {
+        const lower = name.toLowerCase();
+        if (lower === "transfer-encoding" || lower === "connection") return;
+        res.setHeader(name, value);
+      });
+
+      // Forward response body
+      const responseBuffer = Buffer.from(await response.arrayBuffer());
+      res.send(responseBuffer);
+
+      console.log(`[PROXY] ${req.method} ${req.originalUrl} -> ${response.status}`);
+    } catch (err) {
+      console.error(`[PROXY ERROR] ${req.method} ${req.originalUrl}:`, err.message);
+      if (!res.headersSent) {
+        res.status(502).json({
+          error: "Proxy error",
+          message: `Could not reach tunnel: ${err.message}`,
+        });
+      }
+    }
+  });
+
+  req.on("error", (err) => {
+    console.error("[PROXY REQUEST ERROR]", err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Request error", message: err.message });
+    }
+  });
+});
+
+// ─── Root: Status page ───────────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  const statusColor = TUNNEL_URL ? "#22c55e" : "#ef4444";
+  const statusText = TUNNEL_URL ? "Tunnel Active" : "Tunnel Not Connected";
+  const statusEmoji = TUNNEL_URL ? "🟢" : "🔴";
+
+  res.type("text/html").send(`<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Formulario n8n</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>n8n Webhook Proxy</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; }
-    input { padding: 8px; margin: 10px 0; width: 300px; }
-    button { padding: 10px 20px; cursor: pointer; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #1e293b; border-radius: 12px; padding: 32px; max-width: 520px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    h1 { font-size: 1.5rem; margin-bottom: 24px; color: #f8fafc; }
+    .status { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 8px; background: ${TUNNEL_URL ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)'}; border: 1px solid ${statusColor}33; margin-bottom: 20px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: ${statusColor}; }
+    .status-text { color: ${statusColor}; font-weight: 600; }
+    .info { margin-bottom: 20px; }
+    .info dt { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
+    .info dd { font-family: 'SF Mono', 'Consolas', monospace; font-size: 0.875rem; color: #cbd5e1; word-break: break-all; }
+    .endpoints { list-style: none; margin-top: 16px; }
+    .endpoints li { padding: 8px 0; border-bottom: 1px solid #334155; font-size: 0.875rem; }
+    .endpoints li:last-child { border: none; }
+    code { background: #334155; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+    .method { color: #60a5fa; font-weight: 600; }
+    footer { margin-top: 20px; font-size: 0.75rem; color: #64748b; text-align: center; }
   </style>
 </head>
 <body>
-  <h2>Formulario n8n</h2>
-  <input type="text" id="nombre" placeholder="Tu nombre" />
-  <button onclick="enviar()">Enviar</button>
-  <p id="status"></p>
-
-  <script>
-    const webhookUrl = "${webhookUrl}";
-    console.log("Webhook URL:", webhookUrl);
-
-    function enviar() {
-      const status = document.getElementById("status");
-      status.textContent = "Enviando...";
-      
-      fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nombre: document.getElementById("nombre").value
-        })
-      })
-      .then(response => {
-        if (response.ok) {
-          status.textContent = "✓ Enviado correctamente!";
-          status.style.color = "green";
-          document.getElementById("nombre").value = "";
-        } else {
-          status.textContent = "✗ Error en la respuesta";
-          status.style.color = "red";
-        }
-      })
-      .catch(err => {
-        console.error("Error:", err);
-        status.textContent = "✗ Error: " + err.message;
-        status.style.color = "red";
-      });
-    }
-  </script>
+  <div class="card">
+    <h1>${statusEmoji} n8n Webhook Proxy</h1>
+    <div class="status">
+      <div class="dot"></div>
+      <span class="status-text">${statusText}</span>
+    </div>
+    <dl class="info">
+      <dt>Tunnel URL</dt>
+      <dd>${TUNNEL_URL || "Not registered — run start.ps1 locally"}</dd>
+      ${TUNNEL_REGISTERED_AT ? `<dt>Registered</dt><dd>${TUNNEL_REGISTERED_AT}</dd>` : ""}
+      <dt>Usage</dt>
+      <dd>Send webhooks to this server's URL + the n8n webhook path</dd>
+    </dl>
+    <h3 style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 8px;">Endpoints</h3>
+    <ul class="endpoints">
+      <li><span class="method">ANY</span> <code>/webhook/*</code> → proxy to n8n</li>
+      <li><span class="method">ANY</span> <code>/webhook-test/*</code> → proxy to n8n</li>
+      <li><span class="method">POST</span> <code>/api/tunnel</code> → register tunnel URL</li>
+      <li><span class="method">GET</span> <code>/api/status</code> → tunnel status</li>
+      <li><span class="method">GET</span> <code>/health</code> → health check</li>
+    </ul>
+    <footer>n8n Webhook Proxy &middot; Powered by Render</footer>
+  </div>
 </body>
-</html>`;
-  res.type("text/html").send(html);
+</html>`);
 });
 
-// Endpoint público estable para el webhook del formulario
-app.post("/webhook/test", async (req, res) => {
-  const targetUrl = `${TARGET_URL}${WEBHOOK_PATH}`;
-  console.log(`[WEBHOOK] Recibiendo petición en /webhook/test, forwardeando a ${targetUrl}`);
-  try {
-    const headers = {};
-    if (req.headers["content-type"]) {
-      headers["content-type"] = req.headers["content-type"];
-    }
-
-    const response = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body: JSON.stringify(req.body)
-    });
-
-    res.status(response.status);
-    response.headers.forEach((value, name) => {
-      res.setHeader(name, value);
-    });
-
-    const body = await response.text();
-    res.send(body);
-  } catch (err) {
-    console.error("[WEBHOOK ERROR]", err);
-    res.status(500).json({ error: "Proxy error", message: err.message });
-  }
-});
-
-// Proxy genérico para cualquier webhook directo /webhook/*
-app.all("/webhook/*", async (req, res) => {
-  const targetUrl = `${TARGET_URL}${req.originalUrl}`;
-  console.log(`[PROXY] ${req.method} ${req.originalUrl} -> ${targetUrl}`);
-  try {
-    const headers = { ...req.headers };
-    delete headers.host;
-
-    const options = {
-      method: req.method,
-      headers
-    };
-
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      options.body = JSON.stringify(req.body);
-    }
-
-    const response = await fetch(targetUrl, options);
-
-    res.status(response.status);
-    response.headers.forEach((value, name) => {
-      res.setHeader(name, value);
-    });
-
-    const body = await response.text();
-    res.send(body);
-  } catch (err) {
-    console.error("[PROXY ERROR]", err);
-    res.status(500).json({ error: "Proxy error", message: err.message });
-  }
-});
-
-// Endpoint para actualizar la configuración
-app.post("/api/config", (req, res) => {
-  const token = req.headers.authorization;
-  if (token !== `Bearer ${process.env.CONFIG_TOKEN || "mysecret"}`) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  if (req.body.targetUrl) {
-    TARGET_URL = req.body.targetUrl;
-    console.log("[CONFIG] TARGET_URL actualizada:", TARGET_URL);
-  }
-
-  if (req.body.webhookPath) {
-    WEBHOOK_PATH = req.body.webhookPath;
-    console.log("[CONFIG] WEBHOOK_PATH actualizada:", WEBHOOK_PATH);
-  }
-
-  if (req.body.publicUrl) {
-    PUBLIC_URL = req.body.publicUrl;
-    console.log("[CONFIG] PUBLIC_URL actualizada:", PUBLIC_URL);
-  }
-
-  res.json({
-    message: "Configuration updated",
-    webhookUrl: `${PUBLIC_URL}${WEBHOOK_PATH}`,
-    targetUrl: TARGET_URL,
-    webhookPath: WEBHOOK_PATH,
-    publicUrl: PUBLIC_URL
-  });
-});
-
-// Health check
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
-
-// Raíz
-app.get("/", (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>N8N Proxy - Webhooks</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 40px; max-width: 600px; }
-        h1 { color: #333; }
-        code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }
-        .status { background: #e8f4f8; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        a { color: #0066cc; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-      </style>
-    </head>
-    <body>
-      <h1>N8N Webhook Proxy</h1>
-      <div class="status">
-        <h3>Estado del servidor: ✓ Activo</h3>
-        <p><strong>Fecha:</strong> ${new Date().toISOString()}</p>
-      </div>
-      <h3>Endpoints disponibles:</h3>
-      <ul>
-        <li><code>GET /form</code> - Formulario con webhook inyectado</li>
-        <li><code>GET /api/config</code> - Obtener configuración actual</li>
-        <li><code>POST /api/config</code> - Actualizar configuración</li>
-        <li><code>POST /webhook/test</code> - Webhook de prueba</li>
-        <li><code>POST /webhook/*</code> - Proxy genérico de webhooks</li>
-        <li><code>GET /health</code> - Health check</li>
-      </ul>
-      <h3>Configuración actual:</h3>
-      <p>
-        <strong>PUBLIC_URL:</strong> ${PUBLIC_URL}<br>
-        <strong>TARGET_URL:</strong> ${TARGET_URL}<br>
-        <strong>WEBHOOK_PATH:</strong> ${WEBHOOK_PATH}<br>
-        <strong>Webhook URL:</strong> ${PUBLIC_URL}${WEBHOOK_PATH}
-      </p>
-      <h3>Enlaces rápidos:</h3>
-      <ul>
-        <li><a href="/form">Ir al formulario →</a></li>
-        <li><a href="/api/config">Ver configuración JSON →</a></li>
-      </ul>
-    </body>
-    </html>
-  `);
-});
-
-// Manejo de errores 404
+// ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: "Not found", path: req.originalUrl });
 });
 
-// Arrancar servidor
+// ─── Start server ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`
-╔════════════════════════════════════════════════════════╗
-║           N8N Webhook Proxy - Iniciado                 ║
-╠════════════════════════════════════════════════════════╣
-║ Puerto:        ${PORT}
-║ Public URL:    ${PUBLIC_URL}
-║ Target URL:    ${TARGET_URL}
-║ Webhook Path:  ${WEBHOOK_PATH}
-║ Webhook URL:   ${PUBLIC_URL}${WEBHOOK_PATH}
-╚════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════╗
+║       n8n Webhook Proxy — Started            ║
+╠══════════════════════════════════════════════╣
+║ Port:       ${String(PORT).padEnd(33)}║
+║ Tunnel:     ${(TUNNEL_URL || "not registered").padEnd(33)}║
+╚══════════════════════════════════════════════╝
   `);
 });
