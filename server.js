@@ -169,6 +169,7 @@ app.post("/api/setup-test-workflow", async (req, res) => {
           position: [240, 300],
           webhookId: TEST_WEBHOOK_PATH,
           parameters: {
+            httpMethod: "POST",
             path: TEST_WEBHOOK_PATH,
             responseMode: "responseNode",
             options: {},
@@ -187,7 +188,7 @@ app.post("/api/setup-test-workflow", async (req, res) => {
                 {
                   id: "a1b2c3d4-0003-0003-0003-000000000003",
                   name: "mensaje",
-                  value: "={{ 'Hola ' + ($json.nombre || 'visitante') + '! Tu formulario fue recibido correctamente.' }}",
+                  value: "={{ 'Hola ' + ($json.body.nombre || 'visitante') + '! Tu formulario fue recibido correctamente.' }}",
                   type: "string",
                 },
                 {
