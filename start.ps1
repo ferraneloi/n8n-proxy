@@ -23,6 +23,7 @@ if (Test-Path $envFile) {
 # --- Variables ---
 $RENDER_URL = $env:RENDER_URL
 $CONFIG_TOKEN = $env:CONFIG_TOKEN
+$N8N_API_KEY = $env:N8N_API_KEY
 if (-not $CONFIG_TOKEN) { $CONFIG_TOKEN = "mysecret" }
 
 if (-not $RENDER_URL) {
@@ -146,7 +147,9 @@ Write-Host ""
 # ============================================================================
 Write-Host "[4/4] Registrando tunel con Render ($RENDER_URL)..." -ForegroundColor Yellow
 
-$registerBody = @{ tunnelUrl = $tunnelUrl } | ConvertTo-Json
+$bodyObj = @{ tunnelUrl = $tunnelUrl }
+if ($N8N_API_KEY) { $bodyObj.n8nApiKey = $N8N_API_KEY }
+$registerBody = $bodyObj | ConvertTo-Json
 $registerHeaders = @{
     "Content-Type"  = "application/json"
     "Authorization" = "Bearer $CONFIG_TOKEN"
@@ -199,17 +202,22 @@ Write-Host "  Tunel directo:     $tunnelUrl" -ForegroundColor White
 
 if ($registered) {
     Write-Host "  Proxy Render:      $RENDER_URL" -ForegroundColor White
+    Write-Host "  Dashboard:         $RENDER_URL/dashboard" -ForegroundColor White
     Write-Host ""
     Write-Host "  Ejemplo webhook via Render:" -ForegroundColor Cyan
     Write-Host "  $RENDER_URL/webhook/<tu-uuid>" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  Ejemplo webhook via tunel directo:" -ForegroundColor Cyan
-    Write-Host "  $tunnelUrl/webhook/<tu-uuid>" -ForegroundColor White
 }
 else {
     Write-Host ""
     Write-Host "  Ejemplo webhook via tunel directo:" -ForegroundColor Cyan
     Write-Host "  $tunnelUrl/webhook/<tu-uuid>" -ForegroundColor White
+}
+
+if (-not $N8N_API_KEY) {
+    Write-Host ""
+    Write-Host "  [AVISO] N8N_API_KEY no configurada. El dashboard no listara webhooks." -ForegroundColor Yellow
+    Write-Host "  Creala en n8n: Settings > API > Add API Key" -ForegroundColor Gray
+    Write-Host "  Luego anadela a .env: N8N_API_KEY=tu-clave" -ForegroundColor Gray
 }
 
 Write-Host ""
@@ -245,7 +253,9 @@ try {
                 Write-Host "  Nuevo tunel: $newTunnelUrl" -ForegroundColor Green
 
                 # Re-registrar con Render
-                $registerBody = @{ tunnelUrl = $newTunnelUrl } | ConvertTo-Json
+                $reBodyObj = @{ tunnelUrl = $newTunnelUrl }
+                if ($N8N_API_KEY) { $reBodyObj.n8nApiKey = $N8N_API_KEY }
+                $registerBody = $reBodyObj | ConvertTo-Json
                 try {
                     Invoke-RestMethod -Uri "$RENDER_URL/api/tunnel" `
                         -Method POST -Body $registerBody `
