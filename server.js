@@ -264,10 +264,19 @@ app.get("/health", (req, res) => {
 });
 
 // ─── Webhook Proxy ───────────────────────────────────────────────────────────
+app.options(["/webhook/*", "/webhook-test/*"], (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+  res.header("Access-Control-Allow-Headers", req.headers["access-control-request-headers"] || "*");
+  res.sendStatus(200);
+});
+
 app.all(["/webhook/*", "/webhook-test/*"], (req, res) => {
   if (!TUNNEL_URL) return res.status(503).json({ error: "Tunnel not configured" });
   const targetUrl = `${TUNNEL_URL}${req.originalUrl}`;
   console.log(`[PROXY] ${req.method} ${req.originalUrl} -> ${targetUrl}`);
+  res.header("Access-Control-Allow-Origin", "*");
+  
   const chunks = [];
   req.on("data", (chunk) => chunks.push(chunk));
   req.on("end", async () => {
@@ -276,7 +285,9 @@ app.all(["/webhook/*", "/webhook-test/*"], (req, res) => {
       const forwardHeaders = {};
       for (const [key, value] of Object.entries(req.headers)) {
         const lower = key.toLowerCase();
-        if (["host", "connection", "content-length"].includes(lower)) continue;
+        // Evitamos enviar accept-encoding para que n8n no lo comprima
+        // y Node fetch no haga el lio auto-descomprimiendo a Buffer
+        if (["host", "connection", "content-length", "accept-encoding"].includes(lower)) continue;
         forwardHeaders[key] = value;
       }
       const fetchOptions = { method: req.method, headers: forwardHeaders };
@@ -284,7 +295,10 @@ app.all(["/webhook/*", "/webhook-test/*"], (req, res) => {
       const response = await fetch(targetUrl, fetchOptions);
       res.status(response.status);
       response.headers.forEach((value, name) => {
-        if (!["transfer-encoding", "connection"].includes(name.toLowerCase())) res.setHeader(name, value);
+        const lName = name.toLowerCase();
+        if (!["transfer-encoding", "connection", "content-encoding", "content-length", "access-control-allow-origin"].includes(lName)) {
+          res.setHeader(name, value);
+        }
       });
       res.send(Buffer.from(await response.arrayBuffer()));
     } catch (err) {
