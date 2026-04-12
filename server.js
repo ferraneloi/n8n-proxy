@@ -1,5 +1,6 @@
 const express = require("express");
 const app = express();
+app.set("trust proxy", 1);
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let TUNNEL_URL = process.env.TARGET_URL || "";
@@ -441,9 +442,9 @@ async function setupWorkflow() {
     const r = await fetch('/api/setup-test-workflow', { method: 'POST' });
     const d = await r.json();
     if (r.ok) {
-      // Actualizar la URL del webhook con la real devuelta por el servidor
-      currentWebhookUrl = d.webhookUrl || currentWebhookUrl;
-      document.getElementById('wh-label').textContent = 'Webhook: ' + currentWebhookUrl;
+      // Usar URL relativa para el fetch y evitar errores de Mixed Content en Render
+      currentWebhookUrl = '/webhook/' + (d.webhookPath || 'test-form');
+      document.getElementById('wh-label').textContent = 'Webhook: ' + d.webhookUrl;
       msg.innerHTML = '<span style="color:#4ade80">✅ ' + d.message + '</span><span class="wh-url">' + d.webhookUrl + '</span>';
       btn.textContent = d.created ? '✅ Workflow Creado' : '✅ Ya Existia';
     } else {
