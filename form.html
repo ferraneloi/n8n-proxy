@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Formulario n8n</h2>
+
+  <input type="text" id="nombre" placeholder="Tu nombre" />
+  <button onclick="enviar()">Enviar</button>
+
+  <script>
+    const webhookUrl = "https://TU-PROXY.onrender.com/webhook/test";
+
+    function enviar() {
+      fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombre: document.getElementById("nombre").value
+        })
+      })
+      .then(() => alert("Enviado!"))
+      .catch(() => alert("Error"));
+    }
+  </script>
+</body>
+</html>
